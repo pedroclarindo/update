@@ -18,6 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTicketAgentInfo = null;
     // Variável global para o usuário logado
     let currentUser = null;
+        // Helper para checar privilégio
+        function isPrivilegedUser() {
+            const profile = currentUser && currentUser.profile ? String(currentUser.profile).toLowerCase() : '';
+            return profile === 'admin' || profile === 'administrador' || profile === 'supervisor';
+        }
     // Variável global para o token de sessão
     let sessionToken = null;
     // Intervalo para atualizar usuários online
@@ -413,6 +418,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Inicializa filtro de tags no dropdown
     try { populateFilterTagsDropdown(); } catch(e) { console.warn('Erro ao inicializar filtro de tags', e); }
+    // Recarrega tags ao clicar na lupa, garantindo contagens atualizadas
+    try {
+        const searchBtn = document.getElementById('search-tickets-btn');
+        if (searchBtn) {
+            searchBtn.addEventListener('click', () => {
+                try { populateFilterTagsDropdown(); } catch(e) { /* ignore */ }
+            });
+        }
+    } catch(e) { console.warn('Não foi possível anexar listener ao botão de busca por tags', e); }
 
     // Helper para selecionar sub-abas de inbox sem usar .click() programático
     function selectSubtabPending() {
@@ -1985,8 +1999,14 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (currentUser && currentUser.id && currentUser.queue_ids && currentUser.queue_ids.length > 0) {
                 effectiveQueueIds = currentUser.queue_ids.map(v => Number(v));
             }
+            // Para usuários comuns, incluir user_id para restringir aos próprios tickets;
+            // Para admin/supervisor, NÃO incluir user_id para permitir ver tickets de todos os usuários.
             if (effectiveQueueIds && effectiveQueueIds.length > 0) {
-                userParams = `&user_id=${currentUser.id}&queue_ids=${effectiveQueueIds.join(',')}`;
+                if (!isPrivilegedUser()) {
+                    userParams = `&user_id=${currentUser.id}&queue_ids=${effectiveQueueIds.join(',')}`;
+                } else {
+                    userParams = `&queue_ids=${effectiveQueueIds.join(',')}`;
+                }
             }
             
             // Adiciona filtro de tag se selecionado
@@ -2061,6 +2081,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             // Admin/Supervisor: vê TODOS os tickets concluídos (SEM FILTRO ALGUM)
                             resolvedParams = '';
                         }
+                        
+                            // Adiciona filtro de tag se selecionado
+                            if (selectedTagFilter) {
+                                resolvedParams += `&tag_id=${selectedTagFilter}`;
+                            }
                     } else {
                         // Para outras views que não são 'resolved', usa os parâmetros normais
                         resolvedParams = userParams;
@@ -2370,6 +2395,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${queueName ? `<span class="badge" style="background-color: ${queueColor}; font-size: 0.65rem; padding: 0.25rem 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">${queueName}</span>` : ''}
                     </div>
                     <p class="mb-1 small text-muted text-truncate">${ticket.last_message}</p>
+                    <div class="ticket-tags-preview d-flex flex-wrap gap-1 mt-1" data-ticket-id="${ticket.id}">
+                        <!-- Tags serão carregadas aqui -->
+                    </div>
                 </div>
                 <!-- Barra de Status Colorida -->
                 <div class="ticket-status-bar" style="background-color: ${stripeColor};"></div>
@@ -2391,6 +2419,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${queueName ? `<span class="badge" style="background-color: ${queueColor}; font-size: 0.65rem; padding: 0.25rem 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">${queueName}</span>` : ''}
                     </div>
                     <p class="mb-1 small text-muted text-truncate">${ticket.last_message}</p>
+                    <div class="ticket-tags-preview d-flex flex-wrap gap-1 mt-1" data-ticket-id="${ticket.id}">
+                        <!-- Tags serão carregadas aqui -->
+                    </div>
                     <div class="position-absolute top-0 start-50 translate-middle-x mt-2 d-flex align-items-center" style="z-index:2;">
                         <button class="btn btn-sm btn-primary accept-ticket-btn" title="Aceitar atendimento">Aceitar</button>
                     </div>
@@ -2425,8 +2456,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ticketElement.innerHTML = ticketHTML;
         ticketListContainer.appendChild(ticketElement);
         
-        // Carrega as tags do ticket de forma assíncrona
-        loadTicketTagsPreview(ticket.id);
+        // Carrega as tags do ticket de forma assíncrona após garantir que elemento está no DOM
+        setTimeout(() => loadTicketTagsPreview(ticket.id), 0);
     }
 
     // Carrega e exibe uma prévia das tags do ticket na lista
@@ -2436,17 +2467,31 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) return;
 
             const tags = await response.json();
-            const previewContainer = ticketListContainer.querySelector(`.ticket-tags-preview[data-ticket-id="${ticketId}"]`);
             
-            if (previewContainer && tags.length > 0) {
-                previewContainer.innerHTML = tags.map(tag => `
-                    <span class="badge" style="background-color: ${tag.color}; font-size: 0.65rem; padding: 0.2rem 0.4rem;">
-                        ${tag.name}
-                    </span>
-                `).join('');
+            // Tenta encontrar o container múltiplas vezes se necessário
+            let previewContainer = document.querySelector(`.ticket-tags-preview[data-ticket-id="${ticketId}"]`);
+            
+            // Se não encontrar, aguarda um pouco e tenta novamente
+            if (!previewContainer) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                previewContainer = document.querySelector(`.ticket-tags-preview[data-ticket-id="${ticketId}"]`);
+            }
+            
+            if (previewContainer) {
+                if (tags.length > 0) {
+                    previewContainer.innerHTML = tags.map(tag => `
+                        <span class="badge" style="background-color: ${tag.color}; font-size: 0.65rem; padding: 0.2rem 0.4rem;">
+                            ${tag.name}
+                        </span>
+                    `).join('');
+                } else {
+                    previewContainer.innerHTML = '';
+                }
+            } else {
+                console.warn(`Container de tags não encontrado para ticket ${ticketId}`);
             }
         } catch (error) {
-            // Silently fail - tags são opcionais
+            console.error('Erro ao carregar preview de tags:', error);
         }
     }
 
@@ -4131,7 +4176,7 @@ async function reopenTicket() {
         if (tags.length === 0) {
             tagsTableBody.innerHTML = `
                 <tr>
-                    <td colspan="3" class="text-center text-muted py-4">
+                    <td colspan="2" class="text-center text-muted py-4">
                         <i class="bi bi-tags fs-3 d-block mb-2"></i>
                         Nenhuma tag cadastrada
                     </td>
@@ -4142,15 +4187,11 @@ async function reopenTicket() {
 
         tags.forEach(tag => {
             const row = document.createElement('tr');
-            const ticketCount = tag.ticket_count || 0;
             row.innerHTML = `
                 <td>
                     <span class="badge px-3 py-2" style="background-color: ${tag.color}; font-size: 0.875rem;">
                         ${tag.name}
                     </span>
-                </td>
-                <td>
-                    <span class="${ticketCount > 0 ? 'text-dark fw-semibold' : 'text-muted'}">${ticketCount}</span>
                 </td>
                 <td class="text-center">
                     <button class="btn btn-sm btn-outline-primary me-1 edit-tag-btn" data-id="${tag.id}" data-name="${tag.name}" data-color="${tag.color}" title="Editar">
@@ -4187,14 +4228,41 @@ async function reopenTicket() {
     // Popula o dropdown de filtro de tags
     async function populateFilterTagsDropdown() {
         try {
-            const response = await fetch('/api/tags');
+            // Todos os perfis podem usar filtro de tags; escopo é tratado no backend/userParams
+            const searchBtn = document.getElementById('search-tickets-btn');
+            if (searchBtn) searchBtn.style.display = '';
+            // Monta filtros atuais para refletir contagens relevantes
+            const sessionTokenParam = sessionToken ? `&sessionToken=${sessionToken}` : '';
+            // Se estiver na Inbox, usar o substatus atual (pending/attending/aguardando)
+            const effectiveStatus = (currentTicketView === 'inbox') ? (currentTicketStatus || '') : (currentTicketView || '');
+            const statusParam = effectiveStatus ? `&status=${effectiveStatus}` : '';
+            let userParam = '';
+            // Para admin/supervisor, NÃO enviar user_id para não limitar contagem às próprias atribuições
+            if (currentUser && currentUser.id && !isPrivilegedUser()) {
+                userParam = `&user_id=${currentUser.id}`;
+            }
+            let queueParam = '';
+            let effectiveQueueIds = null;
+            if (Array.isArray(selectedQueueFilters) && selectedQueueFilters.length > 0) {
+                effectiveQueueIds = selectedQueueFilters;
+            } else if (currentUser && currentUser.queue_ids && currentUser.queue_ids.length > 0) {
+                effectiveQueueIds = currentUser.queue_ids.map(v => Number(v));
+            }
+            if (effectiveQueueIds && effectiveQueueIds.length > 0) {
+                queueParam = `&queue_ids=${effectiveQueueIds.join(',')}`;
+            }
+
+            const response = await fetch(`/api/tags?${userParam}${statusParam}${queueParam}${sessionTokenParam}`.replace(/^\?&/, '?'));
             if (!response.ok) return;
             
             const tags = await response.json();
-            const container = document.getElementById('filter-tags-list');
+            // Preferir UL inteiro; se lista interna existir, usar ela
+            let container = document.getElementById('filter-tags-list');
+            if (!container) container = document.getElementById('filter-tags-dropdown');
             if (!container) return;
 
-            container.innerHTML = '';
+            // Limpa apenas itens gerados (dropdown-item das tags)
+            container.querySelectorAll('.filter-tag-item').forEach(el => el.parentElement && el.parentElement.remove());
 
             if (tags.length === 0) {
                 container.innerHTML = '<li><span class="dropdown-item text-muted">Nenhuma tag disponível</span></li>';
@@ -4203,21 +4271,18 @@ async function reopenTicket() {
 
             tags.forEach(tag => {
                 const li = document.createElement('li');
-                li.innerHTML = `
-                    <a class="dropdown-item filter-tag-item" href="#" data-tag-id="${tag.id}">
-                        <span class="badge me-2" style="background-color: ${tag.color};">${tag.name}</span>
-                        <span class="text-muted">(${tag.ticket_count || 0})</span>
-                    </a>
+                const link = document.createElement('a');
+                link.className = 'dropdown-item filter-tag-item';
+                link.href = '#';
+                link.dataset.tagId = tag.id;
+                link.innerHTML = `
+                    <span class="badge me-2" style="background-color: ${tag.color};">${tag.name}</span>
+                    <span class="text-muted">(${tag.ticket_count || 0})</span>
                 `;
-                container.appendChild(li);
-            });
-
-            // Adiciona event listeners
-            document.querySelectorAll('.filter-tag-item').forEach(item => {
-                item.addEventListener('click', async (e) => {
+                
+                link.addEventListener('click', async (e) => {
                     e.preventDefault();
-                    const tagId = item.dataset.tagId;
-                    selectedTagFilter = tagId;
+                    selectedTagFilter = tag.id;
                     
                     // Atualiza visual do botão
                     const searchBtn = document.getElementById('search-tickets-btn');
@@ -4225,16 +4290,29 @@ async function reopenTicket() {
                         searchBtn.classList.add('btn-primary');
                         searchBtn.classList.remove('btn-outline-secondary');
                     }
+                    // Exibe badge com a tag escolhida ao lado da lupa
+                    const selectedBadge = document.getElementById('selected-tag-badge');
+                    if (selectedBadge) {
+                        selectedBadge.style.display = '';
+                        selectedBadge.innerHTML = `<span class="badge" style="background-color: ${tag.color};">${tag.name}</span>`;
+                    }
                     
                     // Recarrega tickets com filtro
                     await loadTickets();
                 });
+                
+                li.appendChild(link);
+                container.appendChild(li);
             });
 
             // Botão de limpar filtro
-            const clearFilterItem = document.querySelector('[data-tag-id="all"]');
-            if (clearFilterItem) {
-                clearFilterItem.addEventListener('click', async (e) => {
+            const clearFilterLink = container.parentElement.querySelector('[data-tag-id="all"]');
+            if (clearFilterLink) {
+                // Remove listener antigo se existir
+                const newClearLink = clearFilterLink.cloneNode(true);
+                clearFilterLink.parentNode.replaceChild(newClearLink, clearFilterLink);
+                
+                newClearLink.addEventListener('click', async (e) => {
                     e.preventDefault();
                     selectedTagFilter = null;
                     
@@ -4243,6 +4321,12 @@ async function reopenTicket() {
                     if (searchBtn) {
                         searchBtn.classList.remove('btn-primary');
                         searchBtn.classList.add('btn-outline-secondary');
+                    }
+                    // Oculta/limpa badge da tag selecionada
+                    const selectedBadge = document.getElementById('selected-tag-badge');
+                    if (selectedBadge) {
+                        selectedBadge.style.display = 'none';
+                        selectedBadge.innerHTML = '';
                     }
                     
                     // Recarrega tickets sem filtro
@@ -4398,35 +4482,51 @@ async function reopenTicket() {
             if (!response.ok) throw new Error('Falha ao carregar tags do ticket.');
 
             const tags = await response.json();
-            renderTicketTags(tags, ticketId);
+            
+            // Busca status do ticket para determinar se pode remover tags
+            const ticketElement = document.querySelector(`[data-ticket-id="${ticketId}"]`);
+            const ticketStatus = ticketElement ? ticketElement.getAttribute('data-status') : null;
+            
+            renderTicketTags(tags, ticketId, ticketStatus);
         } catch (error) {
             console.error('Erro ao carregar tags do ticket:', error);
         }
     }
 
     // Renderiza as tags do ticket no cabeçalho do chat
-    function renderTicketTags(tags, ticketId) {
+    function renderTicketTags(tags, ticketId, ticketStatus) {
         if (!ticketTagsList) return;
 
         ticketTagsList.innerHTML = '';
+        const isResolved = ticketStatus === 'resolved';
 
         tags.forEach(tag => {
             const tagBadge = document.createElement('span');
             tagBadge.className = 'badge d-flex align-items-center gap-1';
             tagBadge.style.backgroundColor = tag.color;
             tagBadge.style.fontSize = '0.75rem';
-            tagBadge.innerHTML = `
-                ${tag.name}
-                <i class="bi bi-x-circle" style="cursor: pointer;" data-tag-id="${tag.id}" data-ticket-id="${ticketId}" title="Remover tag"></i>
-            `;
+            
+            // Não mostra botão de remover se ticket estiver concluído
+            if (isResolved) {
+                tagBadge.innerHTML = `${tag.name}`;
+            } else {
+                tagBadge.innerHTML = `
+                    ${tag.name}
+                    <i class="bi bi-x-circle" style="cursor: pointer;" data-tag-id="${tag.id}" data-ticket-id="${ticketId}" title="Remover tag"></i>
+                `;
+                
+                // Event listener para remover tag
+                const removeIcon = tagBadge.querySelector('.bi-x-circle');
+                if (removeIcon) {
+                    removeIcon.addEventListener('click', async (e) => {
+                        const tagId = e.target.dataset.tagId;
+                        const ticketId = e.target.dataset.ticketId;
+                        await removeTagFromTicket(ticketId, tagId);
+                    });
+                }
+            }
+            
             ticketTagsList.appendChild(tagBadge);
-
-            // Event listener para remover tag
-            tagBadge.querySelector('.bi-x-circle').addEventListener('click', async (e) => {
-                const tagId = e.target.dataset.tagId;
-                const ticketId = e.target.dataset.ticketId;
-                await removeTagFromTicket(ticketId, tagId);
-            });
         });
     }
 

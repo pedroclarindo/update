@@ -9,7 +9,9 @@ const moduleInfo = {
     internal_chat: { icon: 'fas fa-comment-dots', name: 'Chat Interno' },
     permissions: { icon: 'fas fa-shield-alt', name: 'Permissões' },
     reports: { icon: 'fas fa-file-alt', name: 'Relatórios' },
-    delete_tickets: { icon: 'fas fa-trash-alt', name: 'Excluir Tickets' }
+    delete_tickets: { icon: 'fas fa-trash-alt', name: 'Excluir Tickets' },
+    // Novo módulo Tags
+    tags: { icon: 'fas fa-tags', name: 'Tags' }
 };
 
 // Nomes amigáveis dos perfis

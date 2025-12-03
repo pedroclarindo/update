@@ -1042,7 +1042,9 @@ db.run(`CREATE TABLE IF NOT EXISTS connections (
                     'quick_responses',
                     'internal_chat',
                     'permissions',
-                    'reports'
+                    'reports',
+                    // Inclui módulo de Tags
+                    'tags'
                 ];
                 
                 const profiles = ['admin', 'supervisor', 'usuario'];
@@ -1071,6 +1073,41 @@ db.run(`CREATE TABLE IF NOT EXISTS connections (
                 
                 logger.info('Permissões padrão inseridas com sucesso.');
             }
+
+            // Garante que o módulo 'tags' exista para todos os perfis, mesmo em bancos já inicializados
+            const ensureTagsModule = () => {
+                const views = {
+                    admin: 1,
+                    supervisor: 1,
+                    usuario: 1
+                };
+
+                Object.keys(views).forEach(profile => {
+                    const view = views[profile];
+                    // Tenta inserir apenas can_view; ignora can_edit para compatibilidade com esquemas antigos
+                    db.run(
+                        'INSERT OR IGNORE INTO permissions (profile, module, can_view) VALUES (?, ?, ?)',
+                        [profile, 'tags', view],
+                        (insErr) => {
+                            if (insErr) {
+                                logger.warn(`Falha ao garantir permissão tags (${profile}): ${insErr.message}`);
+                                return;
+                            }
+                            db.run(
+                                'UPDATE permissions SET can_view = ?, updated_at = CURRENT_TIMESTAMP WHERE profile = ? AND module = ?',
+                                [view, profile, 'tags'],
+                                (updErr) => {
+                                    if (updErr) {
+                                        logger.warn(`Falha ao atualizar permissão tags (${profile}): ${updErr.message}`);
+                                    }
+                                }
+                            );
+                        }
+                    );
+                });
+            };
+
+            ensureTagsModule();
         });
 
         // Limpeza automática de cooldowns expirados a cada 5 minutos
@@ -4623,20 +4660,74 @@ app.delete('/api/queues/:id', (req, res) => {
 
 // GET todas as tags
 app.get('/api/tags', (req, res) => {
-    const sql = `
+    const { user_id, status, queue_ids } = req.query;
+    // Base query de tags com contagem
+    // Se tiver filtros (user/status/queues), contagem será feita apenas nos tickets que atendem aos filtros
+    let sql = `
         SELECT t.id, t.name, t.color, t.created_at,
-               COUNT(tt.ticket_id) as ticket_count
+               COUNT(DISTINCT tt.ticket_id) AS ticket_count
         FROM tags t
         LEFT JOIN ticket_tags tt ON t.id = tt.tag_id
-        GROUP BY t.id
-        ORDER BY t.name ASC
+        LEFT JOIN tickets tk ON tt.ticket_id = tk.id
     `;
-    db.all(sql, [], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
+
+    const params = [];
+    const whereClauses = [];
+
+    // Aplica filtro por status
+    if (status) {
+        whereClauses.push('tk.status = ?');
+        params.push(status);
+    }
+
+    // Aplica filtro por user_id (tickets atribuídos ao usuário OU pendentes nas filas do usuário)
+    if (user_id) {
+        // Obter filas permitidas para o usuário
+        db.all('SELECT queue_id FROM user_queues WHERE user_id = ?', [user_id], (qErr, qRows) => {
+            if (qErr) return res.status(500).json({ error: qErr.message });
+            const allowedQueueIds = (qRows || []).map(r => r.queue_id);
+
+            let userFilter = '(tk.user_id = ?)';
+            const userParams = [user_id];
+
+            if (allowedQueueIds.length > 0) {
+                const placeholders = allowedQueueIds.map(() => '?').join(',');
+                userFilter = `(${userFilter} OR (tk.status = 'pending' AND tk.user_id IS NULL AND (tk.is_on_hold = 0 OR tk.is_on_hold IS NULL) AND tk.queue_id IN (${placeholders})))`;
+                userParams.push(...allowedQueueIds);
+            }
+
+            whereClauses.push(userFilter);
+            params.push(...userParams);
+
+            finalize();
+        });
+    } else {
+        finalize();
+    }
+
+    function finalize() {
+        if (queue_ids) {
+            const parts = String(queue_ids).split(',').map(s => s.trim()).filter(Boolean);
+            if (parts.length > 0) {
+                const placeholders = parts.map(() => '?').join(',');
+                whereClauses.push(`tk.queue_id IN (${placeholders})`);
+                params.push(...parts);
+            }
         }
-        res.json(rows);
-    });
+
+        if (whereClauses.length > 0) {
+            sql += ` WHERE ${whereClauses.join(' AND ')}`;
+        }
+
+        sql += ' GROUP BY t.id ORDER BY t.name ASC';
+
+        db.all(sql, params, (err, rows) => {
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json(rows);
+        });
+    }
 });
 
 // GET uma única tag por ID
@@ -4753,14 +4844,27 @@ app.post('/api/tickets/:ticketId/tags', (req, res) => {
 app.delete('/api/tickets/:ticketId/tags/:tagId', (req, res) => {
     const { ticketId, tagId } = req.params;
     
-    db.run('DELETE FROM ticket_tags WHERE ticket_id = ? AND tag_id = ?', [ticketId, tagId], function(err) {
+    // Verifica se o ticket está concluído antes de permitir remoção
+    db.get('SELECT status FROM tickets WHERE id = ?', [ticketId], (err, ticket) => {
         if (err) {
             return res.status(500).json({ error: err.message });
         }
-        if (this.changes === 0) {
-            return res.status(404).json({ error: 'Associação não encontrada.' });
+        if (!ticket) {
+            return res.status(404).json({ error: 'Ticket não encontrado.' });
         }
-        res.json({ message: 'Tag removida do ticket com sucesso.' });
+        if (ticket.status === 'resolved') {
+            return res.status(403).json({ error: 'Não é possível remover tags de tickets concluídos.' });
+        }
+        
+        db.run('DELETE FROM ticket_tags WHERE ticket_id = ? AND tag_id = ?', [ticketId, tagId], function(err) {
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            if (this.changes === 0) {
+                return res.status(404).json({ error: 'Associação não encontrada.' });
+            }
+            res.json({ message: 'Tag removida do ticket com sucesso.' });
+        });
     });
 });
 
@@ -5593,7 +5697,8 @@ app.get('/api/user-permissions', (req, res) => {
                 // mapear sinônimos
                 if (s === 'administrador' || s === 'admin') return 'admin';
                 if (s === 'supervisor') return 'supervisor';
-                if (s === 'usuario' || s === 'utilizador' || s === 'user' || s === 'usuari') return 'usuario';
+                // Mapear variações de usuário/agente
+                if (s === 'usuario' || s === 'utilizador' || s === 'user' || s === 'usuari' || s === 'agente' || s === 'agent') return 'usuario';
                 return s;
             };
 
