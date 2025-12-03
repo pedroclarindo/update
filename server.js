@@ -847,6 +847,37 @@ db.run(`CREATE TABLE IF NOT EXISTS connections (
             metadata TEXT
         )`);
         
+        // Criar tabela de tags se não existir
+        db.run(`CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            color TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (err) => {
+            if (err) {
+                logger.warn(`Erro ao criar tabela tags: ${err.message}`);
+            } else {
+                logger.info('Tabela tags verificada/criada com sucesso.');
+            }
+        });
+        
+        // Criar tabela de relacionamento entre tickets e tags (many-to-many)
+        db.run(`CREATE TABLE IF NOT EXISTS ticket_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (ticket_id) REFERENCES tickets (id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE,
+            UNIQUE(ticket_id, tag_id)
+        )`, (err) => {
+            if (err) {
+                logger.warn(`Erro ao criar tabela ticket_tags: ${err.message}`);
+            } else {
+                logger.info('Tabela ticket_tags verificada/criada com sucesso.');
+            }
+        });
+        
         // Migração: adicionar coluna gender à tabela users
         db.all("PRAGMA table_info('users')", (err, columns) => {
             if (err) {
@@ -2703,13 +2734,22 @@ app.get('/api/tickets', (req, res) => {
     const sessionToken = req.query.sessionToken || req.headers['x-session-token'];
     const userIdParam = req.query.user_id; // fallback (menos seguro)
     const queueIds = req.query.queue_ids; // IDs das filas do usuário (separados por vírgula)
+    const tagId = req.query.tag_id; // Filtro por tag
     
     let sql = "SELECT * FROM tickets WHERE status = ?";
     const params = [status];
     
+    // Se tem filtro por tag, modificamos a query para fazer JOIN
+    if (tagId) {
+        sql = `SELECT t.* FROM tickets t 
+               INNER JOIN ticket_tags tt ON t.id = tt.ticket_id 
+               WHERE t.status = ? AND tt.tag_id = ?`;
+        params.push(tagId);
+    }
+    
     // Filtro por on_hold
     if (onHold === '0' || onHold === '1') {
-        sql += " AND is_on_hold = ?";
+        sql += tagId ? " AND t.is_on_hold = ?" : " AND is_on_hold = ?";
         params.push(parseInt(onHold, 10));
     }
 
@@ -2726,7 +2766,7 @@ app.get('/api/tickets', (req, res) => {
 
                 if (isAdmin) {
                     // Administradores veem tudo (com filtros aplicados acima)
-                    sql += " ORDER BY last_message_at DESC";
+                    sql += tagId ? " ORDER BY t.last_message_at DESC" : " ORDER BY last_message_at DESC";
                     db.all(sql, params, (err, rows) => {
                         if (err) return res.status(500).json({ error: err.message });
                         const formattedRows = rows.map(ticket => ({ ...ticket, formatted_last_message_time: formatLastMessageTime(ticket.last_message_at) }));
@@ -2748,8 +2788,9 @@ app.get('/api/tickets', (req, res) => {
 
                         const queuePlaceholders = supervisorQueueIds.map(() => '?').join(',');
                         // Supervisor vê todos os tickets das suas filas (independente do agente)
-                        sql += ` AND queue_id IN (${queuePlaceholders})`;
-                        sql += " ORDER BY last_message_at DESC";
+                        const tablePrefix = tagId ? "t." : "";
+                        sql += ` AND ${tablePrefix}queue_id IN (${queuePlaceholders})`;
+                        sql += tagId ? " ORDER BY t.last_message_at DESC" : " ORDER BY last_message_at DESC";
                         
                         db.all(sql, [...params, ...supervisorQueueIds], (err, rows) => {
                             if (err) return res.status(500).json({ error: err.message });
@@ -2765,20 +2806,21 @@ app.get('/api/tickets', (req, res) => {
                 db.all('SELECT queue_id FROM user_queues WHERE user_id = ?', [effectiveUserId], (qErr, qRows) => {
                     if (qErr) return res.status(500).json({ error: qErr.message });
                     const allowedQueueIds = qRows ? qRows.map(r => r.queue_id) : [];
+                    const tablePrefix = tagId ? "t." : "";
 
                     if (!allowedQueueIds || allowedQueueIds.length === 0) {
                         // Sem filas atribuídas: apenas tickets atribuídos diretamente ao usuário
-                        sql += ' AND user_id = ?';
+                        sql += ` AND ${tablePrefix}user_id = ?`;
                         params.push(effectiveUserId);
                     } else {
                         const queuePlaceholders = allowedQueueIds.map(() => '?').join(',');
                         // Mostrar tickets atribuídos ao usuário OU tickets pendentes SEM atribuição (user_id IS NULL)
                         // cuja queue_id pertence às filas que o usuário tem permissão.
-                        sql += ` AND (user_id = ? OR (status = 'pending' AND user_id IS NULL AND (is_on_hold = 0 OR is_on_hold IS NULL) AND queue_id IN (${queuePlaceholders})))`;
+                        sql += ` AND (${tablePrefix}user_id = ? OR (${tablePrefix}status = 'pending' AND ${tablePrefix}user_id IS NULL AND (${tablePrefix}is_on_hold = 0 OR ${tablePrefix}is_on_hold IS NULL) AND ${tablePrefix}queue_id IN (${queuePlaceholders})))`;
                         params.push(effectiveUserId, ...allowedQueueIds);
                     }
 
-                    sql += " ORDER BY last_message_at DESC";
+                    sql += tagId ? " ORDER BY t.last_message_at DESC" : " ORDER BY last_message_at DESC";
                     db.all(sql, params, (err, rows) => {
                         if (err) return res.status(500).json({ error: err.message });
                         const formattedRows = rows.map(ticket => ({ ...ticket, formatted_last_message_time: formatLastMessageTime(ticket.last_message_at) }));
@@ -2788,7 +2830,7 @@ app.get('/api/tickets', (req, res) => {
             });
         } else {
             // no user resolved - public or no-filter response
-            sql += " ORDER BY last_message_at DESC";
+            sql += tagId ? " ORDER BY t.last_message_at DESC" : " ORDER BY last_message_at DESC";
             db.all(sql, params, (err, rows) => {
                 if (err) return res.status(500).json({ error: err.message });
                 const formattedRows = rows.map(ticket => ({ ...ticket, formatted_last_message_time: formatLastMessageTime(ticket.last_message_at) }));
@@ -4574,6 +4616,151 @@ app.delete('/api/queues/:id', (req, res) => {
                 });
             });
         });
+    });
+});
+
+// --- API para Tags ---
+
+// GET todas as tags
+app.get('/api/tags', (req, res) => {
+    const sql = `
+        SELECT t.id, t.name, t.color, t.created_at,
+               COUNT(tt.ticket_id) as ticket_count
+        FROM tags t
+        LEFT JOIN ticket_tags tt ON t.id = tt.tag_id
+        GROUP BY t.id
+        ORDER BY t.name ASC
+    `;
+    db.all(sql, [], (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+// GET uma única tag por ID
+app.get('/api/tags/:id', (req, res) => {
+    const { id } = req.params;
+    db.get("SELECT * FROM tags WHERE id = ?", [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ message: "Tag não encontrada." });
+        }
+        res.json(row);
+    });
+});
+
+// POST para criar uma nova tag
+app.post('/api/tags', (req, res) => {
+    const { name, color } = req.body;
+    if (!name || !color) {
+        return res.status(400).json({ error: "O nome e a cor da tag são obrigatórios." });
+    }
+    const sql = 'INSERT INTO tags (name, color) VALUES (?, ?)';
+    db.run(sql, [name.trim(), color], function(err) {
+        if (err) {
+            if (err.code === 'SQLITE_CONSTRAINT') {
+                return res.status(409).json({ error: 'Já existe uma tag com este nome.' });
+            }
+            return res.status(500).json({ error: err.message });
+        }
+        const now = getLocalDateTime();
+        res.status(201).json({ id: this.lastID, name: name.trim(), color, created_at: now });
+    });
+});
+
+// PUT para atualizar uma tag
+app.put('/api/tags/:id', (req, res) => {
+    const { id } = req.params;
+    const { name, color } = req.body;
+    if (!name || !color) {
+        return res.status(400).json({ error: "O nome e a cor da tag são obrigatórios." });
+    }
+    const sql = 'UPDATE tags SET name = ?, color = ? WHERE id = ?';
+    db.run(sql, [name.trim(), color, id], function(err) {
+        if (err) {
+            if (err.code === 'SQLITE_CONSTRAINT') {
+                return res.status(409).json({ error: 'Já existe uma tag com este nome.' });
+            }
+            return res.status(500).json({ error: err.message });
+        }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: 'Tag não encontrada.' });
+        }
+        res.json({ id: parseInt(id), name: name.trim(), color });
+    });
+});
+
+// DELETE para excluir uma tag
+app.delete('/api/tags/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM tags WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: 'Tag não encontrada.' });
+        }
+        res.json({ message: 'Tag excluída com sucesso.' });
+    });
+});
+
+// --- API para Relacionamento Ticket-Tags ---
+
+// GET tags de um ticket específico
+app.get('/api/tickets/:ticketId/tags', (req, res) => {
+    const { ticketId } = req.params;
+    const sql = `
+        SELECT t.id, t.name, t.color
+        FROM tags t
+        INNER JOIN ticket_tags tt ON t.id = tt.tag_id
+        WHERE tt.ticket_id = ?
+        ORDER BY t.name ASC
+    `;
+    db.all(sql, [ticketId], (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+// POST para adicionar uma tag a um ticket
+app.post('/api/tickets/:ticketId/tags', (req, res) => {
+    const { ticketId } = req.params;
+    const { tagId } = req.body;
+    
+    if (!tagId) {
+        return res.status(400).json({ error: 'O ID da tag é obrigatório.' });
+    }
+    
+    const sql = 'INSERT INTO ticket_tags (ticket_id, tag_id) VALUES (?, ?)';
+    db.run(sql, [ticketId, tagId], function(err) {
+        if (err) {
+            if (err.code === 'SQLITE_CONSTRAINT') {
+                return res.status(409).json({ error: 'Esta tag já está associada ao ticket.' });
+            }
+            return res.status(500).json({ error: err.message });
+        }
+        res.status(201).json({ message: 'Tag adicionada ao ticket com sucesso.' });
+    });
+});
+
+// DELETE para remover uma tag de um ticket
+app.delete('/api/tickets/:ticketId/tags/:tagId', (req, res) => {
+    const { ticketId, tagId } = req.params;
+    
+    db.run('DELETE FROM ticket_tags WHERE ticket_id = ? AND tag_id = ?', [ticketId, tagId], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: 'Associação não encontrada.' });
+        }
+        res.json({ message: 'Tag removida do ticket com sucesso.' });
     });
 });
 

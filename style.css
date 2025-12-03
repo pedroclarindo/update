@@ -595,3 +595,108 @@ body {
     animation: blink-red 1.5s infinite;
 }
 
+/* Estilos profissionais para a seção de Tags */
+#tags-content .table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+#tags-content .table thead th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+    color: #495057;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    padding: 1rem 0.75rem;
+}
+
+#tags-content .table tbody tr {
+    transition: all 0.2s ease;
+}
+
+#tags-content .table tbody tr:hover {
+    background-color: #f8f9fa;
+    transform: scale(1.01);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+#tags-content .table tbody td {
+    vertical-align: middle;
+    padding: 1rem 0.75rem;
+    border-bottom: 1px solid #e9ecef;
+}
+
+#tags-content .badge {
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: all 0.2s ease;
+}
+
+#tags-content .badge:hover {
+    transform: scale(1.05);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.15);
+}
+
+#tags-content .btn-outline-primary:hover,
+#tags-content .btn-outline-danger:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+/* Modal de Tag com estilo refinado */
+#addTagModal .form-control-color {
+    width: 80px;
+    height: 40px;
+    border-radius: 8px;
+    border: 2px solid #dee2e6;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#addTagModal .form-control-color:hover {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.1);
+}
+
+#tag-preview-badge {
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    font-weight: 500;
+}
+
+/* Estilo para o botão de filtro de tags quando ativo */
+#search-tickets-btn.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: white;
+}
+
+#search-tickets-btn.btn-primary:hover {
+    background-color: #0b5ed7;
+    border-color: #0a58ca;
+}
+
+/* Dropdown de filtro de tags */
+#filter-tags-dropdown {
+    min-width: 250px;
+}
+
+#filter-tags-dropdown .dropdown-item {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#filter-tags-dropdown .dropdown-item:hover {
+    background-color: #f8f9fa;
+    transform: translateX(5px);
+}
+
+#filter-tags-dropdown .badge {
+    font-size: 0.875rem;
+    padding: 0.35rem 0.65rem;
+}
+

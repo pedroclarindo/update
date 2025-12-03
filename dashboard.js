@@ -221,6 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const ingressosContent = document.getElementById('ingressos-content');
     const filasContent = document.getElementById('filas-content');
     const usuariosContent = document.getElementById('usuarios-content');
+    const tagsContent = document.getElementById('tags-content');
     const contatosContent = document.getElementById('contatos-content');
     const respostasRapidasContent = document.getElementById('respostas-rapidas-content');
     const chatInternoContent = document.getElementById('chat-interno-content');
@@ -229,6 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const menuIngressos = document.getElementById('menu-ingressos');
     const menuFilas = document.getElementById('menu-filas');
     const menuUsuarios = document.getElementById('menu-usuarios');
+    const menuTags = document.getElementById('menu-tags');
     const menuContatos = document.getElementById('menu-contatos');
     const menuRespostasRapidas = document.getElementById('menu-respostas-rapidas');
     const menuChatInterno = document.getElementById('menu-chat-interno');
@@ -258,6 +260,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const notificationAtendendo = document.getElementById('notification-atendendo');
     // Filtro de filas selecionadas pelo agente (array de ids). Se null -> usar currentUser.queue_ids (padrão)
     let selectedQueueFilters = null;
+    // Filtro de tag selecionada para busca
+    let selectedTagFilter = null;
 
     // Popula o dropdown de filtro de filas ao lado do botão "Filas"
     async function populateTicketQueueFilterList() {
@@ -406,6 +410,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Inicializa filtro de filas no dropdown
     try { populateTicketQueueFilterList(); } catch(e) { console.warn('Erro ao inicializar filtro de filas', e); }
+    
+    // Inicializa filtro de tags no dropdown
+    try { populateFilterTagsDropdown(); } catch(e) { console.warn('Erro ao inicializar filtro de tags', e); }
 
     // Helper para selecionar sub-abas de inbox sem usar .click() programático
     function selectSubtabPending() {
@@ -1647,6 +1654,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ingressosContent.classList.add('d-none');
         filasContent.classList.add('d-none');
         if (usuariosContent) usuariosContent.classList.add('d-none');
+        if (tagsContent) tagsContent.classList.add('d-none');
         if (contatosContent) contatosContent.classList.add('d-none');
         if (respostasRapidasContent) respostasRapidasContent.classList.add('d-none');
         if (chatInternoContent) chatInternoContent.classList.add('d-none');
@@ -1711,6 +1719,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 mainTitle.textContent = 'Usuários';
                 activateMenuItem(menuUsuarios);
                 loadUsers();
+            }
+        } else if (section === 'tags') {
+            if (tagsContent) {
+                tagsContent.classList.remove('d-none');
+                mainTitle.textContent = 'Tags';
+                activateMenuItem(menuTags);
+                loadTags();
             }
         } else if (section === 'contatos') {
             if (contatosContent) {
@@ -1972,6 +1987,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (effectiveQueueIds && effectiveQueueIds.length > 0) {
                 userParams = `&user_id=${currentUser.id}&queue_ids=${effectiveQueueIds.join(',')}`;
+            }
+            
+            // Adiciona filtro de tag se selecionado
+            if (selectedTagFilter) {
+                userParams += `&tag_id=${selectedTagFilter}`;
             }
             
             // Se a visão principal não for 'inbox', busca por ela (ex: 'resolved')
@@ -2394,6 +2414,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${queueName ? `<span class="badge" style="background-color: ${queueColor}; font-size: 0.65rem; padding: 0.25rem 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">${queueName}</span>` : ''}
                     </div>
                     <p class="mb-1 small text-muted text-truncate">${ticket.last_message}</p>
+                    <div class="ticket-tags-preview d-flex flex-wrap gap-1 mt-1" data-ticket-id="${ticket.id}">
+                        <!-- Tags serão carregadas aqui -->
+                    </div>
                 </div>
                 <!-- Barra de Status Colorida -->
                 <div class="ticket-status-bar" style="background-color: ${stripeColor};"></div>
@@ -2401,6 +2424,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         ticketElement.innerHTML = ticketHTML;
         ticketListContainer.appendChild(ticketElement);
+        
+        // Carrega as tags do ticket de forma assíncrona
+        loadTicketTagsPreview(ticket.id);
+    }
+
+    // Carrega e exibe uma prévia das tags do ticket na lista
+    async function loadTicketTagsPreview(ticketId) {
+        try {
+            const response = await fetch(`/api/tickets/${ticketId}/tags`);
+            if (!response.ok) return;
+
+            const tags = await response.json();
+            const previewContainer = ticketListContainer.querySelector(`.ticket-tags-preview[data-ticket-id="${ticketId}"]`);
+            
+            if (previewContainer && tags.length > 0) {
+                previewContainer.innerHTML = tags.map(tag => `
+                    <span class="badge" style="background-color: ${tag.color}; font-size: 0.65rem; padding: 0.2rem 0.4rem;">
+                        ${tag.name}
+                    </span>
+                `).join('');
+            }
+        } catch (error) {
+            // Silently fail - tags são opcionais
+        }
     }
 
     // (Painel de debug PENDENTE removido conforme solicitação do usuário)
@@ -3029,6 +3076,9 @@ async function reopenTicket() {
                     chatBody.innerHTML = '';
                     messages.forEach(renderMessage);
                     chatBody.scrollTop = chatBody.scrollHeight;
+                    
+                    // Carrega as tags do ticket
+                    await loadTicketTags(ticketId);
                 }
                 
                 // Desabilita o campo de entrada (somente visualização)
@@ -3200,6 +3250,9 @@ async function reopenTicket() {
 
             // Rola para a última mensagem
             chatBody.scrollTop = chatBody.scrollHeight;
+            
+            // Carrega as tags do ticket
+            await loadTicketTags(ticketId);
 
             // Controla o campo de mensagem e botões de ação conforme o status do ticket
             const chatInputDisabled = ticketDetails && (
@@ -4022,6 +4075,451 @@ async function reopenTicket() {
         }
     }
 
+    // --- GERENCIAMENTO DE TAGS ---
+
+    let tagIdToDelete = null;
+    let addTagModal = null;
+    let deleteTagModal = null;
+    
+    // Inicializa os modais de forma segura
+    const addTagModalEl = document.getElementById('addTagModal');
+    const deleteTagModalEl = document.getElementById('deleteTagModal');
+    
+    if (addTagModalEl) {
+        addTagModal = new bootstrap.Modal(addTagModalEl);
+    }
+    if (deleteTagModalEl) {
+        deleteTagModal = new bootstrap.Modal(deleteTagModalEl);
+    }
+    
+    const tagForm = document.getElementById('tag-form');
+    const tagIdInput = document.getElementById('tag-id');
+    const tagNameInput = document.getElementById('tag-name');
+    const tagColorInput = document.getElementById('tag-color');
+    const tagPreviewBadge = document.getElementById('tag-preview-badge');
+    const saveTagButton = document.getElementById('save-tag-button');
+    const confirmDeleteTagButton = document.getElementById('confirm-delete-tag-button');
+    const tagSearchInput = document.getElementById('tag-search-input');
+    const tagsTableBody = document.getElementById('tags-table-body');
+
+    // Atualiza prévia da tag ao alterar cor
+    if (tagColorInput && tagPreviewBadge) {
+        tagColorInput.addEventListener('input', () => {
+            tagPreviewBadge.style.backgroundColor = tagColorInput.value;
+        });
+    }
+
+    // Carrega todas as tags
+    async function loadTags() {
+        try {
+            const response = await fetch('/api/tags');
+            if (!response.ok) throw new Error('Falha ao carregar tags.');
+            
+            const tags = await response.json();
+            renderTags(tags);
+        } catch (error) {
+            showNotification(`Erro ao carregar tags: ${error.message}`, 'danger');
+        }
+    }
+
+    // Renderiza as tags na tabela
+    function renderTags(tags) {
+        if (!tagsTableBody) return;
+
+        tagsTableBody.innerHTML = '';
+
+        if (tags.length === 0) {
+            tagsTableBody.innerHTML = `
+                <tr>
+                    <td colspan="3" class="text-center text-muted py-4">
+                        <i class="bi bi-tags fs-3 d-block mb-2"></i>
+                        Nenhuma tag cadastrada
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        tags.forEach(tag => {
+            const row = document.createElement('tr');
+            const ticketCount = tag.ticket_count || 0;
+            row.innerHTML = `
+                <td>
+                    <span class="badge px-3 py-2" style="background-color: ${tag.color}; font-size: 0.875rem;">
+                        ${tag.name}
+                    </span>
+                </td>
+                <td>
+                    <span class="${ticketCount > 0 ? 'text-dark fw-semibold' : 'text-muted'}">${ticketCount}</span>
+                </td>
+                <td class="text-center">
+                    <button class="btn btn-sm btn-outline-primary me-1 edit-tag-btn" data-id="${tag.id}" data-name="${tag.name}" data-color="${tag.color}" title="Editar">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger delete-tag-btn" data-id="${tag.id}" title="Excluir">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            `;
+            tagsTableBody.appendChild(row);
+        });
+
+        // Adiciona event listeners para os botões
+        document.querySelectorAll('.edit-tag-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.dataset.id;
+                const name = btn.dataset.name;
+                const color = btn.dataset.color;
+                openEditTagModal(id, name, color);
+            });
+        });
+
+        document.querySelectorAll('.delete-tag-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                tagIdToDelete = btn.dataset.id;
+                if (deleteTagModal) {
+                    deleteTagModal.show();
+                }
+            });
+        });
+    }
+
+    // Popula o dropdown de filtro de tags
+    async function populateFilterTagsDropdown() {
+        try {
+            const response = await fetch('/api/tags');
+            if (!response.ok) return;
+            
+            const tags = await response.json();
+            const container = document.getElementById('filter-tags-list');
+            if (!container) return;
+
+            container.innerHTML = '';
+
+            if (tags.length === 0) {
+                container.innerHTML = '<li><span class="dropdown-item text-muted">Nenhuma tag disponível</span></li>';
+                return;
+            }
+
+            tags.forEach(tag => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <a class="dropdown-item filter-tag-item" href="#" data-tag-id="${tag.id}">
+                        <span class="badge me-2" style="background-color: ${tag.color};">${tag.name}</span>
+                        <span class="text-muted">(${tag.ticket_count || 0})</span>
+                    </a>
+                `;
+                container.appendChild(li);
+            });
+
+            // Adiciona event listeners
+            document.querySelectorAll('.filter-tag-item').forEach(item => {
+                item.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    const tagId = item.dataset.tagId;
+                    selectedTagFilter = tagId;
+                    
+                    // Atualiza visual do botão
+                    const searchBtn = document.getElementById('search-tickets-btn');
+                    if (searchBtn) {
+                        searchBtn.classList.add('btn-primary');
+                        searchBtn.classList.remove('btn-outline-secondary');
+                    }
+                    
+                    // Recarrega tickets com filtro
+                    await loadTickets();
+                });
+            });
+
+            // Botão de limpar filtro
+            const clearFilterItem = document.querySelector('[data-tag-id="all"]');
+            if (clearFilterItem) {
+                clearFilterItem.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    selectedTagFilter = null;
+                    
+                    // Restaura visual do botão
+                    const searchBtn = document.getElementById('search-tickets-btn');
+                    if (searchBtn) {
+                        searchBtn.classList.remove('btn-primary');
+                        searchBtn.classList.add('btn-outline-secondary');
+                    }
+                    
+                    // Recarrega tickets sem filtro
+                    await loadTickets();
+                });
+            }
+        } catch (error) {
+            console.error('Erro ao carregar tags para filtro:', error);
+        }
+    }
+
+    // Abre o modal para criar nova tag
+    if (document.getElementById('add-tag-button')) {
+        document.getElementById('add-tag-button').addEventListener('click', () => {
+            tagIdInput.value = '';
+            tagNameInput.value = '';
+            tagColorInput.value = '#0d6efd';
+            tagPreviewBadge.style.backgroundColor = '#0d6efd';
+            tagPreviewBadge.textContent = 'Prévia da Tag';
+            document.getElementById('addTagModalLabel').textContent = 'Nova Tag';
+        });
+    }
+
+    // Abre o modal para editar tag existente
+    function openEditTagModal(id, name, color) {
+        tagIdInput.value = id;
+        tagNameInput.value = name;
+        tagColorInput.value = color;
+        tagPreviewBadge.style.backgroundColor = color;
+        tagPreviewBadge.textContent = name;
+        document.getElementById('addTagModalLabel').textContent = 'Editar Tag';
+        if (addTagModal) {
+            addTagModal.show();
+        }
+    }
+
+    // Atualiza prévia ao digitar nome
+    if (tagNameInput && tagPreviewBadge) {
+        tagNameInput.addEventListener('input', () => {
+            tagPreviewBadge.textContent = tagNameInput.value.trim() || 'Prévia da Tag';
+        });
+    }
+
+    // Salva ou atualiza uma tag
+    if (saveTagButton) {
+        saveTagButton.addEventListener('click', async () => {
+            const id = tagIdInput.value;
+            const name = tagNameInput.value.trim();
+            const color = tagColorInput.value;
+
+            if (!name) {
+                showNotification('O nome da tag é obrigatório.', 'warning');
+                return;
+            }
+
+            try {
+                const url = id ? `/api/tags/${id}` : '/api/tags';
+                const method = id ? 'PUT' : 'POST';
+
+                console.log('Enviando requisição:', { url, method, name, color });
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, color })
+                });
+
+                console.log('Status da resposta:', response.status);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Erro da API:', errorData);
+                    throw new Error(errorData.error || 'Falha ao salvar tag.');
+                }
+
+                const result = await response.json();
+                console.log('Tag salva com sucesso:', result);
+
+                if (addTagModal) {
+                    addTagModal.hide();
+                }
+                await loadTags();
+                showNotification(id ? 'Tag atualizada com sucesso!' : 'Tag criada com sucesso!', 'success');
+            } catch (error) {
+                console.error('Erro completo:', error);
+                showNotification(`Erro: ${error.message}`, 'danger');
+            }
+        });
+    }
+
+    // Exclui uma tag
+    if (confirmDeleteTagButton) {
+        confirmDeleteTagButton.addEventListener('click', async () => {
+            if (!tagIdToDelete) return;
+
+            try {
+                const response = await fetch(`/api/tags/${tagIdToDelete}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Falha ao excluir tag.');
+                }
+
+                if (deleteTagModal) {
+                    deleteTagModal.hide();
+                }
+                await loadTags();
+                showNotification('Tag excluída com sucesso!', 'success');
+            } catch (error) {
+                showNotification(`Erro: ${error.message}`, 'danger');
+            } finally {
+                tagIdToDelete = null;
+            }
+        });
+    }
+
+    // Busca em tempo real de tags
+    if (tagSearchInput) {
+        tagSearchInput.addEventListener('input', async () => {
+            const searchTerm = tagSearchInput.value.toLowerCase();
+            
+            try {
+                const response = await fetch('/api/tags');
+                if (!response.ok) throw new Error('Falha ao buscar tags.');
+                
+                const tags = await response.json();
+                const filteredTags = tags.filter(tag => 
+                    tag.name.toLowerCase().includes(searchTerm)
+                );
+                
+                renderTags(filteredTags);
+            } catch (error) {
+                showNotification(`Erro ao buscar tags: ${error.message}`, 'danger');
+            }
+        });
+    }
+
+    // --- GERENCIAMENTO DE TAGS EM TICKETS ---
+
+    const addTagToTicketModal = new bootstrap.Modal(document.getElementById('addTagToTicketModal'));
+    const addTagToTicketBtn = document.getElementById('add-tag-to-ticket-btn');
+    const ticketTagsList = document.getElementById('ticket-tags-list');
+    const availableTagsList = document.getElementById('available-tags-list');
+
+    // Carrega e exibe as tags do ticket atual
+    async function loadTicketTags(ticketId) {
+        if (!ticketId || !ticketTagsList) return;
+
+        try {
+            const response = await fetch(`/api/tickets/${ticketId}/tags`);
+            if (!response.ok) throw new Error('Falha ao carregar tags do ticket.');
+
+            const tags = await response.json();
+            renderTicketTags(tags, ticketId);
+        } catch (error) {
+            console.error('Erro ao carregar tags do ticket:', error);
+        }
+    }
+
+    // Renderiza as tags do ticket no cabeçalho do chat
+    function renderTicketTags(tags, ticketId) {
+        if (!ticketTagsList) return;
+
+        ticketTagsList.innerHTML = '';
+
+        tags.forEach(tag => {
+            const tagBadge = document.createElement('span');
+            tagBadge.className = 'badge d-flex align-items-center gap-1';
+            tagBadge.style.backgroundColor = tag.color;
+            tagBadge.style.fontSize = '0.75rem';
+            tagBadge.innerHTML = `
+                ${tag.name}
+                <i class="bi bi-x-circle" style="cursor: pointer;" data-tag-id="${tag.id}" data-ticket-id="${ticketId}" title="Remover tag"></i>
+            `;
+            ticketTagsList.appendChild(tagBadge);
+
+            // Event listener para remover tag
+            tagBadge.querySelector('.bi-x-circle').addEventListener('click', async (e) => {
+                const tagId = e.target.dataset.tagId;
+                const ticketId = e.target.dataset.ticketId;
+                await removeTagFromTicket(ticketId, tagId);
+            });
+        });
+    }
+
+    // Abre o modal para adicionar tag ao ticket
+    if (addTagToTicketBtn) {
+        addTagToTicketBtn.addEventListener('click', async () => {
+            if (!activeTicketId) return;
+
+            try {
+                // Carrega todas as tags disponíveis
+                const response = await fetch('/api/tags');
+                if (!response.ok) throw new Error('Falha ao carregar tags.');
+
+                const allTags = await response.json();
+
+                // Carrega tags já associadas ao ticket
+                const ticketTagsResponse = await fetch(`/api/tickets/${activeTicketId}/tags`);
+                const ticketTags = ticketTagsResponse.ok ? await ticketTagsResponse.json() : [];
+                const ticketTagIds = ticketTags.map(t => t.id);
+
+                // Filtra tags disponíveis (que não estão no ticket)
+                const availableTags = allTags.filter(tag => !ticketTagIds.includes(tag.id));
+
+                if (availableTagsList) {
+                    availableTagsList.innerHTML = '';
+
+                    if (availableTags.length === 0) {
+                        availableTagsList.innerHTML = '<p class="text-muted">Todas as tags já foram adicionadas a este ticket.</p>';
+                    } else {
+                        availableTags.forEach(tag => {
+                            const tagBtn = document.createElement('button');
+                            tagBtn.className = 'btn btn-sm';
+                            tagBtn.style.backgroundColor = tag.color;
+                            tagBtn.style.color = '#fff';
+                            tagBtn.textContent = tag.name;
+                            tagBtn.addEventListener('click', async () => {
+                                await addTagToTicket(activeTicketId, tag.id);
+                                addTagToTicketModal.hide();
+                            });
+                            availableTagsList.appendChild(tagBtn);
+                        });
+                    }
+                }
+
+                addTagToTicketModal.show();
+            } catch (error) {
+                showNotification(`Erro: ${error.message}`, 'danger');
+            }
+        });
+    }
+
+    // Adiciona uma tag ao ticket
+    async function addTagToTicket(ticketId, tagId) {
+        try {
+            const response = await fetch(`/api/tickets/${ticketId}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tagId })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Falha ao adicionar tag.');
+            }
+
+            showNotification('Tag adicionada com sucesso!', 'success');
+            await loadTicketTags(ticketId);
+            await loadTickets(); // Recarrega lista de tickets para atualizar tags visíveis
+        } catch (error) {
+            showNotification(`Erro: ${error.message}`, 'danger');
+        }
+    }
+
+    // Remove uma tag do ticket
+    async function removeTagFromTicket(ticketId, tagId) {
+        try {
+            const response = await fetch(`/api/tickets/${ticketId}/tags/${tagId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Falha ao remover tag.');
+            }
+
+            showNotification('Tag removida com sucesso!', 'success');
+            await loadTicketTags(ticketId);
+            await loadTickets(); // Recarrega lista de tickets para atualizar tags visíveis
+        } catch (error) {
+            showNotification(`Erro: ${error.message}`, 'danger');
+        }
+    }
+
     // --- EVENT LISTENERS ---
 
     logoutButton.addEventListener('click', () => {
@@ -4360,6 +4858,7 @@ async function reopenTicket() {
     menuIngressos.addEventListener('click', (e) => { e.preventDefault(); navigateTo('ingressos'); });
     menuFilas.addEventListener('click', (e) => { e.preventDefault(); navigateTo('filas'); });
     if (menuUsuarios) menuUsuarios.addEventListener('click', (e) => { e.preventDefault(); navigateTo('usuarios'); });
+    if (menuTags) menuTags.addEventListener('click', (e) => { e.preventDefault(); navigateTo('tags'); });
     if (menuContatos) menuContatos.addEventListener('click', (e) => { e.preventDefault(); navigateTo('contatos'); });
     if (menuRespostasRapidas) menuRespostasRapidas.addEventListener('click', (e) => { e.preventDefault(); navigateTo('respostas-rapidas'); });
     if (menuChatInterno) menuChatInterno.addEventListener('click', (e) => { e.preventDefault(); navigateTo('chat-interno'); });
